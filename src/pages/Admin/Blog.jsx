@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Edit2, Trash2, Eye, Image as ImageIcon, Calendar, User, ArrowRight, Upload, X, 
@@ -5,14 +6,19 @@ import {
   AlignLeft, AlignCenter, AlignRight, AlignJustify, Undo, Redo 
 } from 'lucide-react';
 import AdminSidebar from './Sidebar';
+import { db } from '../../firebase'; // Import firestore instance
+import { 
+  collection, getDocs, addDoc, updateDoc, deleteDoc, doc, serverTimestamp
+} from 'firebase/firestore';
 
 const BlogManager = ({ setIsAdminLoggedIn }) => {
   const [blogs, setBlogs] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [loading, setLoading] = useState(true); // Loading state
+  const [uploading, setUploading] = useState(false); // Uploading state
   
-  // Ref for the contentEditable div
   const editorRef = useRef(null);
 
   const [formData, setFormData] = useState({
@@ -20,54 +26,24 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
     shortDescription: '',
     content: '',
     imageUrl: '',
-    date: '', // Keeping date internal
+    createdAt: null,
   });
 
-  // Initial Sample Data
-  const sampleData = [
-    {
-      id: 1,
-      title: "Air - Vata Story: Michael's \"Bone-Creak Startup\"",
-      shortDescription: "Michael's journey from anxiety and bone pain to balance through Vata pacifying practices.",
-      content: "By 31, Michael was dealing with Vata dosha imbalance, bone pain, and anxiety despite looking healthy. He discovered...",
-      date: "October 24, 2024",
-      imageUrl: "/88db6de979260af2e2e714a2fb8c1e5464ff21b0.png"
-    },
-    {
-      id: 2,
-      title: "Emotional, Modern & Relatable",
-      shortDescription: "Exploring how ancient wisdom applies to modern emotional landscapes.",
-      content: "Life can feel overwhelming — but small moments of guidance can open big doors. Explore Swamiji's...",
-      date: "September 24, 2024",
-      imageUrl: "/fdb5c7755ee90cd83858ebb0c0590a60006afed3.png"
-    },
-    {
-      id: 3,
-      title: "Calm, Healing & Storytelling Focus",
-      shortDescription: "Gentle insights and uplifting stories to help you heal and grow.",
-      content: "Gentle insights, uplifting stories, and simple spiritual wisdom to help you heal, grow, and reconnect with yourself...",
-      date: "August 2024",
-      imageUrl: "/0c81b1e1328bc17db513b001da625beb02818b53.jpg"
-    }
-  ];
+  // Reference to the 'blogs' collection
+  const blogsCollectionRef = collection(db, 'blogs');
+
+  // Fetch blogs from Firestore
+  const getBlogs = async () => {
+    setLoading(true);
+    const data = await getDocs(blogsCollectionRef);
+    const fetchedBlogs = data.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+    setBlogs(fetchedBlogs);
+    setLoading(false);
+  };
 
   useEffect(() => {
-    const saved = localStorage.getItem('blogs');
-    if (saved) {
-      const parsedData = JSON.parse(saved);
-      if (parsedData.length > 0) {
-        setBlogs(parsedData);
-      } else {
-        setBlogs(sampleData);
-      }
-    } else {
-      setBlogs(sampleData);
-    }
+    getBlogs();
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem('blogs', JSON.stringify(blogs));
-  }, [blogs]);
 
   useEffect(() => {
     if (showForm && editorRef.current) {
@@ -75,36 +51,49 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
     }
   }, [showForm, editId]);
 
-  const handleImageChange = (e) => {
+  const handleImageChange = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData({ ...formData, imageUrl: reader.result });
-        setImagePreview(reader.result);
-      };
-      reader.readAsDataURL(file);
+      setUploading(true);
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('upload_preset', 'swami_unsigned'); 
+
+      try {
+        const response = await fetch('https://api.cloudinary.com/v1_1/dn54mfbke/image/upload', { 
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+        setFormData({ ...formData, imageUrl: data.secure_url });
+        setImagePreview(data.secure_url);
+      } catch (error) {
+        console.error('Error uploading image:', error);
+      }
+      setUploading(false);
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (editId) {
-      setBlogs(blogs.map(b => b.id === editId ? { ...formData, id: editId } : b));
+      // Update existing blog
+      const blogDoc = doc(db, 'blogs', editId);
+      await updateDoc(blogDoc, { ...formData });
       setEditId(null);
     } else {
-      const newBlog = {
-        ...formData,
-        id: Date.now(),
-        date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-      };
-      setBlogs([...blogs, newBlog]);
+      // Add new blog
+      await addDoc(blogsCollectionRef, { 
+        ...formData, 
+        createdAt: serverTimestamp()
+      });
     }
     resetForm();
+    getBlogs(); // Refresh blogs after submit
   };
 
   const resetForm = () => {
-    setFormData({ title: '', shortDescription: '', content: '', imageUrl: '', date: '' });
+    setFormData({ title: '', shortDescription: '', content: '', imageUrl: '', createdAt: null });
     setImagePreview(null);
     setShowForm(false);
     setEditId(null);
@@ -119,14 +108,15 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this blog?')) {
-      setBlogs(blogs.filter(b => b.id !== id));
+      const blogDoc = doc(db, 'blogs', id);
+      await deleteDoc(blogDoc);
+      getBlogs(); // Refresh blogs after delete
     }
   };
 
   // --- Rich Text Editor Functions ---
-
   const execCommand = (command, value = null) => {
     document.execCommand(command, false, value);
     if (editorRef.current) {
@@ -144,7 +134,7 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
     const url = prompt('Enter Image URL:');
     if (url) execCommand('insertImage', url);
   };
-
+  
   const ToolbarBtn = ({ onClick, icon: Icon, title }) => (
     <button 
       type="button" 
@@ -157,6 +147,7 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
   );
 
   const Divider = () => <div className="w-px h-6 bg-slate-300 mx-1 self-center opacity-50" />;
+  
 
   return (
     <div className="flex font-sans bg-[#FFFDF0] min-h-screen">
@@ -201,7 +192,9 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
                         <label className="block text-slate-700 font-semibold text-sm mb-2 font-serif">Blog Image</label>
                         <div className="flex flex-col gap-4">
                             <label className="w-full cursor-pointer bg-slate-50 border-2 border-dashed border-slate-300 hover:border-[#FF5900] rounded-2xl h-48 flex flex-col items-center justify-center gap-2 transition-colors group relative overflow-hidden">
-                                {imagePreview ? (
+                                {uploading ? (
+                                  <p>Uploading...</p>
+                                ) : imagePreview ? (
                                     <img src={imagePreview} alt="Preview" className="w-full h-full object-cover absolute inset-0" />
                                 ) : (
                                     <>
@@ -211,7 +204,7 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
                                         <span className="text-slate-500 group-hover:text-[#FF5900] font-medium text-sm">Click to Upload Cover Image</span>
                                     </>
                                 )}
-                                <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                                <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" disabled={uploading} />
                             </label>
                             {imagePreview && (
                                 <button 
@@ -305,73 +298,69 @@ const BlogManager = ({ setIsAdminLoggedIn }) => {
             </div>
           )}
 
-          {/* Blog List - Matched Blog2 Design */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {blogs.length === 0 && (
-              <div className="col-span-full text-center py-12 bg-white rounded-xl border border-dashed border-slate-300">
-                <p className="text-slate-500">No blog posts added yet.</p>
-              </div>
-            )}
-
-            {blogs.map((blog) => (
-              <div 
-                key={blog.id} 
-                className="bg-white rounded-[2rem] shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden border border-gray-100 flex flex-col group relative"
-              >
-                  {/* Admin Controls (Hidden until hover) */}
-                  <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-30">
-                  <button 
-                    onClick={() => handleEdit(blog)}
-                    className="bg-white text-slate-700 cursor-pointer hover:text-[#FF5900] p-2 rounded-full shadow-lg transition-transform hover:scale-110"
-                    title="Edit"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button 
-                    onClick={() => handleDelete(blog.id)}
-                    className="bg-white text-slate-700 cursor-pointer hover:text-red-600 p-2 rounded-full shadow-lg transition-transform hover:scale-110"
-                    title="Delete"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+          {/* Blog List */}
+          {loading ? (
+            <div className="col-span-full text-center py-12">
+              <p className="text-slate-500">Loading blogs...</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {blogs.length === 0 ? (
+                <div className="col-span-full text-center py-12 bg-white rounded-xl border border-dashed border-slate-300">
+                  <p className="text-slate-500">No blog posts added yet. Click 'Add New Blog' to start.</p>
                 </div>
-
-                {/* Image Section */}
-                <div className="h-64 overflow-hidden relative bg-slate-100">
-                  {blog.imageUrl ? (
-                    <img
-                        src={blog.imageUrl}
-                        alt={blog.title}
-                        className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
-                        onError={(e) => {
-                            // Fallback if image fails to load
-                            e.target.style.display = 'none';
-                        }}
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-300">
-                        <ImageIcon size={48} />
+              ) : (
+                blogs.map((blog) => (
+                  <div 
+                    key={blog.id} 
+                    className="bg-white rounded-[2rem] shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden border border-gray-100 flex flex-col group relative"
+                  >
+                      <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-30">
+                      <button 
+                        onClick={() => handleEdit(blog)}
+                        className="bg-white text-slate-700 cursor-pointer hover:text-[#FF5900] p-2 rounded-full shadow-lg transition-transform hover:scale-110"
+                        title="Edit"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(blog.id)}
+                        className="bg-white text-slate-700 cursor-pointer hover:text-red-600 p-2 rounded-full shadow-lg transition-transform hover:scale-110"
+                        title="Delete"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
-                  )}
-                </div>
-
-                {/* Content Container */}
-                <div className="p-6 flex flex-col flex-grow">
-                    <h2 className="text-2xl font-serif font-bold text-[#1A2E44] leading-tight mb-4 line-clamp-2">
-                        {blog.title}
-                    </h2>
-                    <p className="text-gray-600 leading-relaxed mb-6 flex-grow line-clamp-3 text-sm">
-                        {blog.shortDescription}
-                    </p>
-                    
-                    <button className="text-[#FF5900] font-bold flex items-center hover:text-[#d65d3a] transition-colors gap-2 self-start cursor-pointer">
-                        Read Blog
-                        <span className="text-xl">→</span>
-                    </button>
-                </div>
-              </div>
-            ))}
-          </div>
+                    <div className="h-64 overflow-hidden relative bg-slate-100">
+                      {blog.imageUrl ? (
+                        <img
+                            src={blog.imageUrl}
+                            alt={blog.title}
+                            className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-slate-300">
+                            <ImageIcon size={48} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-6 flex flex-col flex-grow">
+                        <h2 className="text-2xl font-serif font-bold text-[#1A2E44] leading-tight mb-4 line-clamp-2">
+                            {blog.title}
+                        </h2>
+                        <p className="text-gray-600 leading-relaxed mb-6 flex-grow line-clamp-3 text-sm">
+                            {blog.shortDescription}
+                        </p>
+                        <button className="text-[#FF5900] font-bold flex items-center hover:text-[#d65d3a] transition-colors gap-2 self-start cursor-pointer">
+                            Read Blog
+                            <span className="text-xl">→</span>
+                        </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

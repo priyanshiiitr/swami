@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Plus, Edit2, Trash2, Image as ImageIcon, User, Upload, X,
@@ -6,62 +7,43 @@ import {
   Clock, BookOpen, Star, Video, Users, Calendar
 } from 'lucide-react';
 import AdminSidebar from './Sidebar';
+import { db } from '../../firebase'; // Import firestore instance
+import { 
+  collection, getDocs, addDoc, updateDoc, deleteDoc, doc, serverTimestamp
+} from 'firebase/firestore';
 
 const CourseManager = ({ setIsAdminLoggedIn }) => {
   const [courses, setCourses] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const editorRef = useRef(null);
 
   const [formData, setFormData] = useState({
     title: '',
     description: '', 
-    category: 'Sanskrit',
-    level: 'Beginner',
-    duration: '',
-    students: 0,
-    rating: 0,
-    lessons: 0,
-    price: '',
+    link: '', // Added link for online session
+    date: '', // Added date for online session
     imageUrl: '',
   });
 
-  // Helper to assign background colors based on index (matches your image variety)
-  const getBgColor = (index) => {
-    const colors = ['bg-[#FFFBEB]', 'bg-[#F0FDF4]', 'bg-[#FAF5FF]'];
-    return colors[index % colors.length];
-  };
+  // Reference to the 'courses' collection
+  const coursesCollectionRef = collection(db, 'courses');
 
-  // Helper to pick icons like the image
-  const getHeaderIcon = (index) => {
-    const icons = [
-      <Video className="w-6 h-6 text-orange-600" />,
-      <Users className="w-6 h-6 text-orange-600" />,
-      <Calendar className="w-6 h-6 text-orange-600" />
-    ];
-    return icons[index % icons.length];
+  // Fetch courses from Firestore
+  const getCourses = async () => {
+    setLoading(true);
+    const data = await getDocs(coursesCollectionRef);
+    const fetchedCourses = data.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+    setCourses(fetchedCourses);
+    setLoading(false);
   };
-
-  const sampleData = [
-    { id: 1, title: "Storytelling for Healing", description: "Learn the art of therapeutic storytelling. Transform your experiences into powerful healing narratives.", duration: "6 weeks", students: "500+", price: "Free", category: "Therapy", level: "Beginner", lessons: 12, rating: 4.8 },
-    { id: 2, title: "Open Mic Leadership", description: "Master the skills to host transformative open mic events. Create safe spaces for authentic expression.", duration: "4 weeks", students: "300+", price: "Free", category: "Leadership", level: "Intermediate", lessons: 8, rating: 4.9 },
-    { id: 3, title: "Live Wisdom Sessions", description: "Join our monthly live webinars. Direct access to Swami's teachings and community Q&A.", duration: "Monthly", students: "1000+", price: "Subscription", category: "Wisdom", level: "All", lessons: 1, rating: 5.0 },
-  ];
 
   useEffect(() => {
-    const saved = localStorage.getItem('courses');
-    if (saved) {
-      const parsedData = JSON.parse(saved);
-      setCourses(parsedData.length > 0 ? parsedData : sampleData);
-    } else {
-      setCourses(sampleData);
-    }
+    getCourses();
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem('courses', JSON.stringify(courses));
-  }, [courses]);
 
   useEffect(() => {
     if (showForm && editorRef.current) {
@@ -69,33 +51,46 @@ const CourseManager = ({ setIsAdminLoggedIn }) => {
     }
   }, [showForm, editId]);
 
-  const handleImageChange = (e) => {
+  const handleImageChange = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData({ ...formData, imageUrl: reader.result });
-        setImagePreview(reader.result);
-      };
-      reader.readAsDataURL(file);
+      setUploading(true);
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('upload_preset', 'swami_unsigned');
+
+      try {
+        const response = await fetch('https://api.cloudinary.com/v1_1/dn54mfbke/image/upload', { 
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+        setFormData({ ...formData, imageUrl: data.secure_url });
+        setImagePreview(data.secure_url);
+      } catch (error) {
+        console.error('Error uploading image:', error);
+      }
+      setUploading(false);
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const finalDescription = editorRef.current ? editorRef.current.innerHTML : formData.description;
     const courseData = { ...formData, description: finalDescription };
 
     if (editId) {
-      setCourses(courses.map(c => c.id === editId ? { ...courseData, id: editId } : c));
+      const courseDoc = doc(db, 'courses', editId);
+      await updateDoc(courseDoc, courseData);
     } else {
-      setCourses([...courses, { ...courseData, id: Date.now() }]);
+      await addDoc(coursesCollectionRef, { ...courseData, createdAt: serverTimestamp() });
     }
     resetForm();
+    getCourses();
   };
 
   const resetForm = () => {
-    setFormData({ title: '', description: '', category: 'Sanskrit', level: 'Beginner', duration: '', students: 0, rating: 0, lessons: 0, price: '', imageUrl: '' });
+    setFormData({ title: '', description: '', link: '', date: '', imageUrl: '' });
     setImagePreview(null);
     setShowForm(false);
     setEditId(null);
@@ -109,9 +104,11 @@ const CourseManager = ({ setIsAdminLoggedIn }) => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     if (window.confirm('Delete this course?')) {
-      setCourses(courses.filter(c => c.id !== id));
+      const courseDoc = doc(db, 'courses', id);
+      await deleteDoc(courseDoc);
+      getCourses();
     }
   };
 
@@ -136,31 +133,58 @@ const CourseManager = ({ setIsAdminLoggedIn }) => {
           {/* Header */}
           <div className="flex justify-between items-center mb-12">
             <div>
-              <h1 className="text-4xl font-serif font-bold text-[#561C24]">Course Management</h1>
-              <p className="text-slate-500 mt-2 text-lg">Create and manage your transformative offerings</p>
+              <h1 className="text-4xl font-serif font-bold text-[#561C24]">Online Sessions</h1>
+              <p className="text-slate-500 mt-2 text-lg">Create and manage your online sessions</p>
             </div>
             <button
               onClick={() => { resetForm(); setShowForm(!showForm); }}
               className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-8 rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-orange-200 cursor-pointer"
             >
               {showForm ? <X size={22} /> : <Plus size={22} />}
-              {showForm ? 'Cancel' : 'Add New Course'}
+              {showForm ? 'Cancel' : 'Add New Session'}
             </button>
           </div>
 
-          {/* Form remains standard but styled to match */}
+          {/* Form */}
           {showForm && (
             <div className="bg-white border border-slate-200 rounded-3xl shadow-xl p-8 mb-12 animate-in fade-in duration-500">
                <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-                {editId ? 'Edit Course Details' : 'Course Information'}
+                {editId ? 'Edit Session Details' : 'Session Information'}
               </h2>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-4">
-                    <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none" placeholder="Course Title" required />
-                    <div className="grid grid-cols-2 gap-4">
-                        <input type="text" value={formData.duration} onChange={(e) => setFormData({ ...formData, duration: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Duration (e.g. 6 weeks)" />
-                        <input type="text" value={formData.students} onChange={(e) => setFormData({ ...formData, students: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Enrolled (e.g. 500+)" />
+                    <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none" placeholder="Session Title" required />
+                    <input type="text" value={formData.link} onChange={(e) => setFormData({ ...formData, link: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none" placeholder="Session Link" required />
+                    <input type="date" value={formData.date} onChange={(e) => setFormData({ ...formData, date: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none" required />
+                    <div>
+                        <label className="block text-slate-700 font-semibold text-sm mb-2 font-serif">Session Image</label>
+                        <div className="flex flex-col gap-4">
+                            <label className="w-full cursor-pointer bg-slate-50 border-2 border-dashed border-slate-300 hover:border-orange-500 rounded-2xl h-48 flex flex-col items-center justify-center gap-2 transition-colors group relative overflow-hidden">
+                                {uploading ? (
+                                  <p>Uploading...</p>
+                                ) : imagePreview ? (
+                                    <img src={imagePreview} alt="Preview" className="w-full h-full object-cover absolute inset-0" />
+                                ) : (
+                                    <>
+                                        <div className="p-3 bg-white rounded-full shadow-sm group-hover:shadow-md transition-all">
+                                            <Upload size={24} className="text-slate-400 group-hover:text-orange-500" />
+                                        </div>
+                                        <span className="text-slate-500 group-hover:text-orange-500 font-medium text-sm">Click to Upload Cover Image</span>
+                                    </>
+                                )}
+                                <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" disabled={uploading} />
+                            </label>
+                            {imagePreview && (
+                                <button 
+                                    type="button" 
+                                    onClick={() => { setImagePreview(null); setFormData({ ...formData, imageUrl: '' }); }}
+                                    className="self-end text-red-500 text-xs font-semibold hover:underline"
+                                >
+                                    Remove Image
+                                </button>
+                            )}
+                        </div>
                     </div>
                   </div>
                   <div className="space-y-4">
@@ -170,63 +194,76 @@ const CourseManager = ({ setIsAdminLoggedIn }) => {
                             <ToolbarBtn onClick={() => execCommand('italic')} icon={Italic} />
                             <ToolbarBtn onClick={() => execCommand('insertUnorderedList')} icon={List} />
                         </div>
-                        <div ref={editorRef} contentEditable onInput={(e) => setFormData({ ...formData, description: e.currentTarget.innerHTML })} className="p-4 min-h-[120px] outline-none bg-white" />
+                        <div ref={editorRef} contentEditable onInput={(e) => setFormData({ ...formData, description: e.currentTarget.innerHTML })} className="p-4 min-h-[120px] outline-none bg-white" placeholder="Session description..." />
                     </div>
                   </div>
                 </div>
                 <button type="submit" className="w-full bg-orange-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-orange-700 transition-colors cursor-pointer">
-                    {editId ? 'Save Changes' : 'Publish Course'}
+                    {editId ? 'Save Changes' : 'Publish Session'}
                 </button>
               </form>
             </div>
           )}
 
-          {/* Course Grid - Replaced to match your Image exactly */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {courses.map((course, index) => (
-              <div
-                key={course.id}
-                className={`${getBgColor(index)} border border-transparent hover:border-orange-200 rounded-[2.5rem] p-8 transition-all duration-300 flex flex-col h-full relative group shadow-sm hover:shadow-xl`}
-              >
-                {/* Admin Actions Overlay */}
-                <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                  <button onClick={() => handleEdit(course)} className="bg-white p-2.5 rounded-full shadow-md text-slate-600 hover:text-blue-600 cursor-pointer transition-colors"><Edit2 size={18} /></button>
-                  <button onClick={() => handleDelete(course.id)} className="bg-white p-2.5 rounded-full shadow-md text-slate-600 hover:text-red-600 cursor-pointer transition-colors"><Trash2 size={18} /></button>
+          {/* Sessions Grid */}
+          {loading ? (
+            <div className="col-span-full text-center py-12">
+              <p className="text-slate-500">Loading sessions...</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {courses.length === 0 ? (
+                <div className="col-span-full text-center py-12 bg-white rounded-xl border border-dashed border-slate-300">
+                  <p className="text-slate-500">No sessions added yet. Click 'Add New Session' to start.</p>
                 </div>
+              ) : (
+                courses.map((course, index) => (
+                  <div
+                    key={course.id}
+                    className={`bg-white border border-transparent hover:border-orange-200 rounded-[2.5rem] p-8 transition-all duration-300 flex flex-col h-full relative group shadow-sm hover:shadow-xl`}
+                  >
+                    <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                      <button onClick={() => handleEdit(course)} className="bg-white p-2.5 rounded-full shadow-md text-slate-600 hover:text-blue-600 cursor-pointer transition-colors"><Edit2 size={18} /></button>
+                      <button onClick={() => handleDelete(course.id)} className="bg-white p-2.5 rounded-full shadow-md text-slate-600 hover:text-red-600 cursor-pointer transition-colors"><Trash2 size={18} /></button>
+                    </div>
 
-                {/* Circle Icon Section */}
-                <div className="w-14 h-14 bg-white rounded-full flex items-center justify-center border border-orange-50 mb-8 shadow-sm">
-                  {getHeaderIcon(index)}
-                </div>
+                    {course.imageUrl && (
+                      <div className="h-64 overflow-hidden relative bg-slate-100 mb-8 rounded-2xl">
+                        <img
+                            src={course.imageUrl}
+                            alt={course.title}
+                            className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
 
-                {/* Content */}
-                <h3 className="text-3xl font-serif font-bold text-slate-800 mb-4 leading-tight">
-                  {course.title}
-                </h3>
-                
-                <div className="text-slate-500 text-lg leading-relaxed mb-8 flex-grow">
-                   <div dangerouslySetInnerHTML={{ __html: course.description }} className="line-clamp-3" />
-                </div>
+                    <h3 className="text-3xl font-serif font-bold text-slate-800 mb-4 leading-tight">
+                      {course.title}
+                    </h3>
+                    
+                    <div className="text-slate-500 text-lg leading-relaxed mb-8 flex-grow">
+                       <div dangerouslySetInnerHTML={{ __html: course.description }} className="line-clamp-3" />
+                    </div>
 
-                {/* Stats Row */}
-                <div className="flex gap-6 text-sm font-bold text-slate-500 mb-8 items-center">
-                  <div className="flex items-center gap-2">
-                    <Users size={18} className="text-slate-400" />
-                    <span>{course.students} enrolled</span>
+                    <div className="flex flex-col gap-2 text-sm font-bold text-slate-500 mb-8">
+                        <div className="flex items-center gap-2">
+                            <Calendar size={18} className="text-slate-400" />
+                            <span>{course.date}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <LinkIcon size={18} className="text-slate-400" />
+                            <a href={course.link} target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline">Session Link</a>
+                        </div>
+                    </div>
+
+                    <button className="w-full bg-orange-600 hover:bg-orange-700 text-white py-4 rounded-2xl font-bold text-xl transition-transform active:scale-95 cursor-pointer shadow-lg shadow-orange-200">
+                      View Session
+                    </button>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Calendar size={18} className="text-slate-400" />
-                    <span>{course.duration}</span>
-                  </div>
-                </div>
-
-                {/* CTA Button */}
-                <button className="w-full bg-orange-600 hover:bg-orange-700 text-white py-4 rounded-2xl font-bold text-xl transition-transform active:scale-95 cursor-pointer shadow-lg shadow-orange-200">
-                  Join Now
-                </button>
-              </div>
-            ))}
-          </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

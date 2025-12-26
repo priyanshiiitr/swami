@@ -1,6 +1,7 @@
+
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, BookOpen,  Book, MessageSquareQuote } from 'lucide-react';
+import { Menu, X, LogOut, BookOpen, Video, MessageSquareQuote } from 'lucide-react';
 
 const AdminSidebar = ({ setIsAdminLoggedIn }) => {
   const [isOpen, setIsOpen] = useState(true);
@@ -8,8 +9,8 @@ const AdminSidebar = ({ setIsAdminLoggedIn }) => {
   const navigate = useNavigate();
 
   const menuItems = [
-    { path: '/admin/blog', label: 'Blog', icon: BookOpen },
-    { path: '/admin/course', label: 'Course', icon: Book },
+    { path: '/admin/blog', label: 'Blogs', icon: BookOpen },
+    { path: '/admin/course', label: 'Online Sessions', icon: Video },
     { path: '/admin/testimonial', label: 'Testimonials', icon: MessageSquareQuote},
   ];
 

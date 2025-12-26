@@ -1,6 +1,9 @@
+
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, Mail, Loader, ArrowRight } from 'lucide-react';
+import { auth } from '../../firebase'; // Import the auth service
+import { signInWithEmailAndPassword } from "firebase/auth";
 
 const AdminLogin = ({ setIsAdminLoggedIn }) => {
   const [email, setEmail] = useState('');
@@ -9,26 +12,29 @@ const AdminLogin = ({ setIsAdminLoggedIn }) => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // Default credentials
-  const ADMIN_EMAIL = 'admin@gmail.com';
-  const ADMIN_PASSWORD = 'Admin123!';
-
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    // Simulate API call
-    setTimeout(() => {
-      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-        setIsAdminLoggedIn(true);
-        localStorage.setItem('adminToken', 'token_' + Date.now());
-        navigate('/admin/blog');
+    try {
+      // Sign in with Firebase
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      
+      // On successful login
+      setIsAdminLoggedIn(true);
+      localStorage.setItem('adminToken', userCredential.user.accessToken);
+      navigate('/admin/blog');
+
+    } catch (error) {
+      // Handle Firebase authentication errors
+      if (error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found') {
+        setError('Invalid email or password.');
       } else {
-        setError('Invalid email or password');
-        setLoading(false);
+        setError('An error occurred. Please try again later.');
       }
-    }, 1000);
+      setLoading(false);
+    }
   };
 
   return (
